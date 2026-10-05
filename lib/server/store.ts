@@ -1,0 +1,92 @@
+import "server-only";
+import type { Event, Job, Post, Profile } from "@/lib/types";
+
+// In-memory demo backend. Stands in for the real GraphQL/API layer.
+// Kept on globalThis so route handlers and Server Actions share one instance.
+
+interface Store {
+  profiles: Record<string, Profile>;
+  posts: Post[];
+  jobs: Omit<Job, "applied">[];
+  applications: Record<string, Set<string>>;
+  events: Event[];
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+function seed(): Store {
+  const now = Date.now();
+  return {
+    profiles: {
+      alice: {
+        id: "alice",
+        name: "Alice Archer",
+        headline: "Staff engineer at Northwind",
+        bio: "Builds resilient web apps. Collects mechanical keyboards.",
+        skills: ["TypeScript", "React", "Distributed systems"],
+      },
+      bob: {
+        id: "bob",
+        name: "Bob Baker",
+        headline: "Product designer at Contoso",
+        bio: "Designs calm interfaces for busy people.",
+        skills: ["Figma", "Design systems", "Research"],
+      },
+    },
+    posts: [
+      { id: "p1", authorName: "Alice Archer", body: "Shipped offline support today!", createdAt: now - 2 * 60 * 60 * 1000 },
+      { id: "p2", authorName: "Bob Baker", body: "Hot take: empty states deserve design reviews too.", createdAt: now - DAY },
+    ],
+    jobs: [
+      { id: "j1", title: "Frontend Engineer", company: "Northwind", location: "Remote", description: "Own the web client, from design system to performance budgets." },
+      { id: "j2", title: "Platform Engineer", company: "Fabrikam", location: "Berlin", description: "Run the build and deploy platform for 200 engineers." },
+      { id: "j3", title: "Design Engineer", company: "Contoso", location: "London", description: "Bridge design and engineering on a small, senior team." },
+    ],
+    applications: {},
+    events: [
+      { id: "e1", title: "Offline-first meetup", startsAt: now + 3 * DAY, venue: "Community hall" },
+      { id: "e2", title: "React Conf watch party", startsAt: now + 10 * DAY, venue: "Online" },
+    ],
+  };
+}
+
+const g = globalThis as typeof globalThis & { __demoStore?: Store };
+const store = (g.__demoStore ??= seed());
+
+export function isKnownUser(userId: string) {
+  return userId in store.profiles;
+}
+
+export function getProfile(userId: string): Profile {
+  return store.profiles[userId];
+}
+
+export function listPosts(): Post[] {
+  return [...store.posts].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function addPost(userId: string, body: string): Post {
+  const post: Post = {
+    id: crypto.randomUUID(),
+    authorName: store.profiles[userId].name,
+    body,
+    createdAt: Date.now(),
+  };
+  store.posts.push(post);
+  return post;
+}
+
+export function listJobs(userId: string): Job[] {
+  const applied = store.applications[userId] ?? new Set();
+  return store.jobs.map((job) => ({ ...job, applied: applied.has(job.id) }));
+}
+
+export function applyToJob(userId: string, jobId: string) {
+  if (!store.jobs.some((job) => job.id === jobId)) return false;
+  (store.applications[userId] ??= new Set()).add(jobId);
+  return true;
+}
+
+export function listEvents(): Event[] {
+  return store.events;
+}
