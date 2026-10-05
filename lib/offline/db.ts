@@ -22,6 +22,21 @@ export interface SessionMeta {
   name: string;
 }
 
+/**
+ * A post written offline, waiting to be sent. `id` is generated on the
+ * device and sent with the post, so sending it twice stores it once.
+ */
+export interface OutboxPost {
+  id: string;
+  userId: string;
+  body: string;
+  /** When the user wrote it. Also the send order. */
+  createdAt: number;
+  /** `failed`: the server rejected it; it waits for the user to retry or discard. */
+  status: "queued" | "failed";
+  error?: string;
+}
+
 export type DomainTable = "feed" | "jobs" | "events" | "profile";
 
 export const DOMAIN_TABLES: DomainTable[] = ["feed", "jobs", "events", "profile"];
@@ -32,6 +47,7 @@ class OfflineDatabase extends Dexie {
   events!: Table<CachedRecord, string>;
   profile!: Table<CachedRecord, string>;
   meta!: Table<SessionMeta, string>;
+  outbox!: Table<OutboxPost, string>;
 
   constructor() {
     super("app-offline");
@@ -44,6 +60,7 @@ class OfflineDatabase extends Dexie {
       profile: "&key, userId",
       meta: "&key",
     });
+    this.version(2).stores({ outbox: "&id, userId, createdAt" });
     this.on("ready", (db) => purgeOutdated(db as OfflineDatabase));
   }
 }
@@ -63,10 +80,15 @@ export function getDb(): OfflineDatabase {
   return (instance ??= new OfflineDatabase());
 }
 
-/** Remove every user-scoped record. Called on logout and on user switch. */
+const USER_TABLES = [...DOMAIN_TABLES, "outbox", "meta"] as const;
+
+/**
+ * Remove every user-scoped record, including posts that were never sent.
+ * Called on logout and on user switch.
+ */
 export async function clearUserData() {
   const db = getDb();
-  await db.transaction("rw", [...DOMAIN_TABLES, "meta"], async () => {
-    await Promise.all([...DOMAIN_TABLES, "meta" as const].map((name) => db.table(name).clear()));
+  await db.transaction("rw", USER_TABLES, async () => {
+    await Promise.all(USER_TABLES.map((name) => db.table(name).clear()));
   });
 }

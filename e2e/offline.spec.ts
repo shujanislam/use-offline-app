@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
 import {
   editSavedRecords,
+  feedBodies,
   expectOfflineBanner,
   nav,
+  queueRawPost,
   savedRecordCounts,
   signIn,
   waitForOfflineData,
@@ -117,9 +119,9 @@ test.describe("offline navigation", () => {
 });
 
 test.describe("mutations", () => {
-  test("offline post is blocked, never reported as sent", async ({ page, context }) => {
+  test("offline post is queued, then published on reconnect", async ({ page, context }) => {
     await signIn(page, "Alice Archer");
-    const text = `offline attempt ${Date.now()}`;
+    const text = `written offline ${Date.now()}`;
 
     await context.setOffline(true);
     await expectOfflineBanner(page);
@@ -127,19 +129,73 @@ test.describe("mutations", () => {
     await page.getByRole("button", { name: "Post" }).click();
 
     await expect(page.getByTestId("action-message")).toHaveText(
-      "You're offline. This action requires an internet connection.",
+      "You're offline. Your post will be published when you're back online.",
     );
-    // The draft is kept so the user can send it later.
-    await expect(page.getByLabel("New post")).toHaveValue(text);
+    await expect(page.getByLabel("New post")).toHaveValue("");
+    await expect(page.getByTestId("pending-posts")).toContainText(text);
+    await expect(page.getByTestId("pending-posts")).toContainText("will be posted when you're back online");
+    expect(await feedBodies(page)).not.toContain(text);
 
     await context.setOffline(false);
-    await expect(page.getByTestId("action-message")).toBeHidden({ timeout: 10_000 });
-    const posts = (await (await page.request.get("/api/feed")).json()) as { body: string }[];
-    expect(posts.map((p) => p.body)).not.toContain(text);
+    await expect(page.getByTestId("feed-list")).toContainText(text, { timeout: 10_000 });
+    await expect(page.getByTestId("pending-posts")).toBeHidden();
+    await expect(page.getByTestId("action-message")).toBeHidden();
+    expect((await feedBodies(page)).filter((body) => body === text)).toHaveLength(1);
+  });
 
-    // Online, the same action goes through.
+  test("offline validation runs before queueing", async ({ page, context }) => {
+    await signIn(page, "Alice Archer");
+    await context.setOffline(true);
+    await expectOfflineBanner(page);
     await page.getByRole("button", { name: "Post" }).click();
-    await expect(page.getByTestId("feed-list")).toContainText(text);
+    await expect(page.getByTestId("action-message")).toHaveText("Write something first.");
+    await expect(page.getByTestId("pending-posts")).toBeHidden();
+  });
+
+  test("queued posts survive an offline reload and are sent once, in order", async ({ page, context }) => {
+    await signIn(page, "Alice Archer");
+    await waitForServiceWorker(page);
+    await waitForOfflineData(page);
+    const first = `queued first ${Date.now()}`;
+    const second = `queued second ${Date.now()}`;
+
+    await context.setOffline(true);
+    for (const text of [first, second]) {
+      await page.getByLabel("New post").fill(text);
+      await page.getByRole("button", { name: "Post" }).click();
+      await expect(page.getByTestId("pending-posts")).toContainText(text);
+    }
+
+    await page.reload();
+    await expect(page.getByTestId("pending-posts")).toContainText(first);
+    await expect(page.getByTestId("pending-posts")).toContainText(second);
+
+    // Two tabs both try to flush the outbox when the connection returns.
+    const other = await context.newPage();
+    await other.goto("/feed");
+    await context.setOffline(false);
+    await expect(page.getByTestId("feed-list")).toContainText(second, { timeout: 10_000 });
+    await expect(page.getByTestId("pending-posts")).toBeHidden();
+
+    const bodies = await feedBodies(page);
+    expect(bodies.filter((body) => body === first)).toHaveLength(1);
+    expect(bodies.filter((body) => body === second)).toHaveLength(1);
+    // Newest first: the second post was sent after the first.
+    expect(bodies.indexOf(second)).toBeLessThan(bodies.indexOf(first));
+    await other.close();
+  });
+
+  test("a queued post the server rejects can be discarded", async ({ page }) => {
+    await signIn(page, "Alice Archer");
+    // Bypass client validation to simulate a post the server refuses.
+    await queueRawPost(page, "alice", "x".repeat(501));
+    // Raw IndexedDB writes aren't observed by the app; it reads the outbox on load.
+    await page.reload();
+
+    const pending = page.getByTestId("pending-posts");
+    await expect(pending).toContainText("Not posted: Posts are limited to 500 characters.", { timeout: 10_000 });
+    await pending.getByRole("button", { name: "Discard" }).click();
+    await expect(pending).toBeHidden();
   });
 
   test("offline sign-out is blocked", async ({ page, context }) => {
@@ -153,6 +209,23 @@ test.describe("mutations", () => {
       "You're offline. This action requires an internet connection.",
     );
     await expect(page).toHaveURL(/\/profile$/);
+  });
+
+  test("signing out with unsent posts asks for confirmation", async ({ page, context }) => {
+    await signIn(page, "Alice Archer");
+    await waitForOfflineData(page);
+    await page.waitForLoadState("networkidle");
+    await context.setOffline(true);
+    await page.getByLabel("New post").fill(`unsent ${Date.now()}`);
+    await page.getByRole("button", { name: "Post" }).click();
+    await expect(page.getByTestId("pending-posts")).toBeVisible();
+    await nav(page, "Profile").click();
+    await expect(page.getByTestId("profile")).toBeVisible();
+
+    // Still offline, so the post stays queued.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page.getByTestId("action-message")).toHaveText("You have 1 unsent post. Signing out will discard it.");
+    await expect(page.getByRole("button", { name: "Sign out anyway" })).toBeVisible();
   });
 });
 

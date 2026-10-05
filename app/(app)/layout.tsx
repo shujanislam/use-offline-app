@@ -1,6 +1,7 @@
 import { AppNav } from "@/components/app/app-nav";
 import { SessionGate } from "@/components/app/session-gate";
 import { OfflineWarmup } from "@/components/offline/offline-warmup";
+import { OutboxSync } from "@/components/offline/outbox-sync";
 import { SessionProvider } from "@/lib/session/session-context";
 
 // Everything under (app) is a static, user-independent shell. Private data is
@@ -11,6 +12,7 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
     <SessionProvider>
       <AppNav />
       <OfflineWarmup />
+      <OutboxSync />
       <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-6">
         <SessionGate>{children}</SessionGate>
       </main>

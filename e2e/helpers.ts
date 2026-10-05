@@ -90,3 +90,29 @@ export async function expectOfflineBanner(page: Page) {
 export function nav(page: Page, label: string) {
   return page.getByRole("navigation").getByRole("link", { name: label, exact: true });
 }
+
+export async function feedBodies(page: Page) {
+  const posts = (await (await page.request.get("/api/feed")).json()) as { body: string }[];
+  return posts.map((post) => post.body);
+}
+
+/** Add a post to the offline outbox directly, skipping the composer's validation. */
+export function queueRawPost(page: Page, userId: string, body: string) {
+  return page.evaluate(
+    ({ userId, body }) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open("app-offline");
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction("outbox", "readwrite");
+          tx.objectStore("outbox").add({ id: crypto.randomUUID(), userId, body, createdAt: Date.now(), status: "queued" });
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    { userId, body },
+  );
+}

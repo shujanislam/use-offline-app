@@ -80,7 +80,7 @@ Next already retries pending work, and a reload would discard the user's state.
 
 | Route | Shell offline | Saved data | Read offline | Mutation |
 | --- | --- | --- | --- | --- |
-| `/feed` | yes | yes | yes | Post: blocked offline |
+| `/feed` | yes | yes | yes | Post: queued offline, sent on reconnect |
 | `/jobs` | yes | yes | yes | — |
 | `/jobs/[id]` | yes, if prefetched (`<Link prefetch>` on the list) | from the jobs list | yes | Apply: blocked offline |
 | `/events` | yes | yes | yes | — |
@@ -89,7 +89,8 @@ Next already retries pending work, and a reload would discard the user's state.
 
 ## Mutations
 
-`useOnlineAction` (`lib/offline/use-online-action.ts`) wraps every write:
+`useOnlineAction` (`lib/offline/use-online-action.ts`) wraps every write
+except posting (see the offline outbox below):
 
 - **Offline when clicked:** nothing is sent. The user sees "You're offline. This
   action requires an internet connection." The draft is kept, and nothing is
@@ -98,7 +99,32 @@ Next already retries pending work, and a reload would discard the user's state.
   replays it after reconnecting. The fetch rejected, so the request never
   reached the server. The button shows "Waiting for connection…".
 
-There is no offline mutation queue yet; that is intentionally left for a later phase.
+### Offline outbox (posts)
+
+A post written while offline is saved to the `outbox` table in IndexedDB
+(`lib/offline/outbox.ts`) instead of being refused. The user sees "You're
+offline. Your post will be published when you're back online.", and the feed
+lists it as pending.
+
+- **Sending:** `OutboxSync` (mounted in the `(app)` layout) sends queued posts
+  oldest first on app start, after every reconnect, and when one is queued or
+  retried online. A Web Lock (`navigator.locks`) allows one flush at a time
+  across tabs.
+- **No duplicates:** each post gets a UUID on the device. `createPost(id,
+  authorId, body)` stores a given id once, so resending after a lost response,
+  a reload mid-send, or from two tabs is safe.
+- **Right author:** the device records who wrote the post, and the server
+  rejects it if a different user is signed in when it's sent.
+- **Validation** (`lib/posts.ts`) runs on the device before queueing and again
+  on the server. A post the server rejects is marked failed and shown with
+  Retry and Discard. Network failures are never treated as rejections:
+  Next keeps the Server Action pending until the connection returns.
+- **Privacy:** unsent posts are user data. They're cleared on sign-out, on user
+  switch, and when the server reports the session expired. The profile page
+  asks for confirmation before signing out with unsent posts.
+- **Timestamps:** the server sets `createdAt` when it receives the post, so a
+  post written offline appears at the time it was published.
+- Job applications and sign-out still require a connection.
 
 ## Known limitations
 
@@ -128,7 +154,10 @@ The suite runs against `next start` using Playwright's `context.setOffline`. It 
 - dynamic server routes (waiting fallback, then resume)
 - no saved data
 - outdated cache versions
-- blocked offline post and sign-out
+- offline posts: queued, validated, sent once and in order after reconnect
+  (also across an offline reload and two tabs), server rejections, and the
+  sign-out warning
+- blocked offline sign-out
 - refresh on reconnect
 - offline hard reload through the SW, including the `/~offline` fallback
 - user switching that leaks no data
