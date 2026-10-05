@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { liveQuery } from "dexie";
 import { createPost } from "@/app/actions";
 import { getDb, type OutboxPost } from "./db";
+import { newId } from "./id";
 import { invalidate } from "./resource";
 
 /**
@@ -13,7 +14,7 @@ import { invalidate } from "./resource";
  */
 
 export async function enqueuePost(userId: string, body: string): Promise<OutboxPost> {
-  const post: OutboxPost = { id: crypto.randomUUID(), userId, body, createdAt: Date.now(), status: "queued" };
+  const post: OutboxPost = { id: newId(), userId, body, createdAt: Date.now(), status: "queued" };
   await getDb().outbox.add(post);
   return post;
 }

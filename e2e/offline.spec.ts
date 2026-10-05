@@ -143,6 +143,26 @@ test.describe("mutations", () => {
     expect((await feedBodies(page)).filter((body) => body === text)).toHaveLength(1);
   });
 
+  test("posting works without crypto.randomUUID (plain http on a LAN IP)", async ({ page, context }) => {
+    // Browsers only expose randomUUID in secure contexts.
+    await page.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined }));
+    await signIn(page, "Alice Archer");
+
+    const online = `insecure online ${Date.now()}`;
+    await page.getByLabel("New post").fill(online);
+    await page.getByRole("button", { name: "Post" }).click();
+    await expect(page.getByTestId("feed-list")).toContainText(online);
+
+    const offline = `insecure offline ${Date.now()}`;
+    await context.setOffline(true);
+    await expectOfflineBanner(page);
+    await page.getByLabel("New post").fill(offline);
+    await page.getByRole("button", { name: "Post" }).click();
+    await expect(page.getByTestId("pending-posts")).toContainText(offline);
+    await context.setOffline(false);
+    await expect(page.getByTestId("feed-list")).toContainText(offline, { timeout: 10_000 });
+  });
+
   test("offline validation runs before queueing", async ({ page, context }) => {
     await signIn(page, "Alice Archer");
     await context.setOffline(true);

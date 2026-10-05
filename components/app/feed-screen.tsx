@@ -5,6 +5,7 @@ import { useOffline } from "next/offline";
 import { createPost } from "@/app/actions";
 import { CachedContent } from "@/components/offline/cached-content";
 import { formatAge } from "@/components/offline/freshness";
+import { newId } from "@/lib/offline/id";
 import { discardPost, enqueuePost, retryPost, usePendingPosts } from "@/lib/offline/outbox";
 import { invalidate } from "@/lib/offline/resource";
 import { useOnlineAction } from "@/lib/offline/use-online-action";
@@ -73,7 +74,7 @@ function Composer() {
     setQueueError(null);
     if (!user) return;
     if (post.offline) void queue(user.id);
-    else post.run(crypto.randomUUID(), user.id, body);
+    else post.run(newId(), user.id, body);
   }
 
   // The queued notice disappears once we're back online; PendingPosts shows progress.
